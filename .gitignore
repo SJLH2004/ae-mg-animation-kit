@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Render / QA output
+out/
+out_png/
+_frames/
+_qa_frames/
+*.aep
+*.aep.bak
+*.psd
+*.aif
+*.wav
+*.mp4
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

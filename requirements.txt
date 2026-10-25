@@ -1,0 +1,11 @@
+# core: blank_scan.py / psd2png.py
+numpy>=1.21
+pillow>=9.0
+
+# Optional — only for the asset pipeline described in references/asset-pipeline.md.
+# Install these yourself if you use the TTS / icon path; no script in this repo
+# imports them.
+# edge-tts>=6.1
+# svglib>=1.4
+# reportlab>=4.0
+# pypdfium2>=4.0
