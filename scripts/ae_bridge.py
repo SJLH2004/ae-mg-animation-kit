@@ -5,38 +5,36 @@ ae_bridge.py — Python <-> After Effects 2023 桥接层（本机实测通过）
 
 三条已验证的能力线：
   1) 驱动正在运行的 AE：AfterFX.exe -r script.jsx   -> 脚本内操作合成/图层/素材
-  2) 结果回传：脚本写 JSON 到磁盘 -> Python 读回（优先 JSON.stringify，无 JSON 时回退内置 __str）
+  2) 结果回传：脚本写 JSON 到磁盘 -> Python 读回（用内置 __str，不依赖 JSON）
   3) 批量渲染：aerender.exe（无界面）-> 出图像序列 -> ffmpeg 编码成片
 
 关键约束（踩过的坑都写在里头，别改掉）：
   * .jsx 文件必须是纯 ASCII。中文一律转成 \\uXXXX 再写盘（cjk_escape 自动做）。
   * ExtendScript 读文件按系统编码（GBK），写 JSON 也默认 GBK -> 必须 f.encoding="UTF-8"。
-  * 【重要】不要假设 JSON 对象一定存在。2026-10-12 实测 AE 2023 (23.5) 上
-    JSON.stringify 抛 '"JSON"未定义'；因为外层有 catch，写盘失败会被静默吞掉，
-    结果文件被创建但内容为空，Python 侧只表现为"等不到结果"超时，极难排查。
-    现在模板内置了 __str() 作为回退，两种环境都安全。
-  * 手写序列化时，undefined 一律跳过（不写成裸字，否则 JSON 非法）。
+  * 【重要】AE 2023 (23.5) 实测 ExtendScript 里没有 JSON 对象，JSON.stringify 会抛
+    '"JSON"未定义'。早期版本这里用了 JSON.stringify，结果写盘被 catch 吞掉、文件为空，
+    Python 侧表现为"等不到结果"超时。现在统一用模板内置的 __str() 手工序列化。
   * aerender 的参数是 -s / -e（起始帧/结束帧，含端点），没有 -sframe。
   * aerender 的 -v 5 会报 "Bad value for -verbose"，别加。
-    * H.264 输出模块在本机 aerender 下恒失败（-1610153423，错误代码 \\1），
-      出片必须走「序列 -> ffmpeg/PR 编码」。
-    * 本机有 AE CC 2015 残留空进程（装插件时留下，项目为 Empty）。`AfterFX.exe -r` 可能连到
-      它，导致脚本读到 `app.project.numItems=0` / `app.projects.length=0`，误以为没有工程。
-      驱动前确认连的是 2023 实例；脚本里用 `app.open(new File("明确的.aep路径"))` 显式打开
-      目标工程最稳，别依赖 `app.project` 当前打开的那个（可能落在 2015 空实例）。
-  * ★ `-r` 同一时间只允许一个脚本：上一个 -r 脚本还没跑完时再发第二个 -r，AE 会拒绝执行
-      第二个并弹模态框「当已在运行其他脚本时，尝试运行第二个脚本…」，模态框会卡死主线程
-      （表现就是 run() 超时回写不了结果）。规则：
-      - 判断上一脚本是否完成，唯一可靠依据是【结果 JSON 文件是否已写出】，不是 Python 端是否返回；
-      - Python 端被超时杀死后，AE 侧脚本往往还在继续跑 —— 此时严禁立刻重发 -r；
-      - 先等结果文件出现 / 或让用户确认 AE 无弹窗，再发下一个脚本；
-      - run() 的 timeout 必须小于外层 Bash/工具超时，否则 Python 先死、AE 还在跑，状态最混乱。
+  * H.264 输出模块在本机 aerender 下恒失败（-1610153423，错误代码 \\1），
+    出片必须走「序列 -> ffmpeg/PR 编码」。
 """
 import json
 import os
 import re
 import subprocess
+import tempfile
 import time
+
+# Windows 控制台/管道默认非 UTF-8（常见 cp1252），直接 print 中文会抛
+# UnicodeEncodeError 使脚本以退出码 1 结束；Linux/macOS 默认 UTF-8 不受影响。
+# 统一在处理前改掉，保证跨平台输出一致。
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 # ---------------------------------------------------------------- 环境探测
 
@@ -63,15 +61,66 @@ def find_ae():
 
 
 AFTERFX, AERENDER = find_ae()
-WORK = r"C:\aelink"          # ASCII 工作区，绝不放中文路径
+
+
+def _pick_work():
+    """挑一个**纯 ASCII** 的工作目录。
+
+    铁律：AE 的 -r 投放和 ExtendScript 的 File API 都对中文路径不友好。
+    曾经把这里改成 tempfile.gettempdir()，结果在中文用户名机器上得到
+    C:\\Users\\中文\\AppData\\...，Jsx 写结果文件被 catch 静默吞掉
+    -> Python 侧只看到"超时无结果"，极难排查（脚本其实是执行成功的）。
+    """
+    cands = [os.environ.get("AEBRIDGE_WORK"),
+             os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Temp", "ae_bridge_work"),
+             os.path.join(tempfile.gettempdir(), "ae_bridge_work")]
+    for c in cands:
+        if c and all(ord(ch) < 128 for ch in c):
+            return c
+    return r"C:\ae_bridge_work"
+
+
+WORK = _pick_work()
+
+
+def _win_process_names():
+    """Windows 进程名列表。用 Toolhelp32 API，不依赖 tasklist/wmic（两者常被
+    安全策略或精简系统禁用，早期版本因调用 tasklist 在受限环境下直接被拦）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_char * 260)]
+
+    k32 = ctypes.windll.kernel32
+    snap = k32.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snap == -1:
+        return []
+    names = []
+    try:
+        pe = PROCESSENTRY32()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        ok = k32.Process32First(snap, ctypes.byref(pe))
+        while ok:
+            names.append(pe.szExeFile.decode("gbk", "replace"))
+            ok = k32.Process32Next(snap, ctypes.byref(pe))
+    finally:
+        k32.CloseHandle(snap)
+    return names
 
 
 def ae_running():
     """AE 主程序是否在跑（-r 驱动运行中的实例需要它）。"""
     try:
-        out = subprocess.run(["tasklist"], capture_output=True, text=True,
-                             encoding="gbk", errors="replace").stdout
-        return "AfterFX.exe" in out
+        if os.name != "nt":
+            return False
+        return any(n.lower() == "afterfx.exe" for n in _win_process_names())
     except Exception:
         return False
 
@@ -90,10 +139,8 @@ def cjk_escape(s):
     return "".join(out)
 
 
-# 内置序列化器：ExtendScript 是 ES3，JSON 对象不保证存在。
-# 2026-10-12 实测：AE 2023 (23.5) 上直接写 JSON.stringify 会抛 '"JSON"未定义'，
-# 写盘被外层 catch 静默吞掉 -> 文件为空 -> Python 侧表现为"等不到结果"超时。
-# 这里优先用 JSON（若存在），否则回退到手工序列化，两种环境都能跑。
+# 内置序列化：ExtendScript 是 ES3，没有 JSON 对象（AE 2023 实测 JSON 未定义）。
+# 支持 string / number / boolean / null / Array / 普通 Object 嵌套，跳过 function/undefined。
 TEMPLATE = """(function () {
     var RESULT = {};
     function __esc(s) {
@@ -132,61 +179,14 @@ __BODY__
         var f = new File("__OUT__");
         f.encoding = "UTF-8";
         f.open("w");
-        if (typeof JSON !== "undefined" && typeof JSON.stringify === "function") {
-            f.write(JSON.stringify(RESULT));
-        } else {
-            f.write(__str(RESULT));
-        }
+        f.write(__str(RESULT));
         f.close();
     } catch (e2) { }
 })();
 """
 
 
-def _push_windows_offscreen(pid, timeout=8.0):
-    """把这个进程的可见窗口挪到屏幕外。
-
-    AE 启动时会强行 ShowWindow，STARTUPINFO 的 SW_HIDE 压不住，
-    所以只能在窗口出现后主动挪走（-32000,-32000 是 Win32 的"屏幕外"惯例值）。
-    AE 加载过程中窗口可能被重建，所以循环检查；移走后连续 6 次没有新窗口就提前返回。
-    """
-    if os.name != "nt":
-        return 0
-    try:
-        import ctypes, time
-        from ctypes import wintypes
-        u = ctypes.windll.user32
-        SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
-        moved = set()
-        quiet = 0
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            found = []
-
-            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            def _cb(hwnd, lp):
-                wpid = wintypes.DWORD()
-                u.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-                if wpid.value == pid and u.IsWindowVisible(hwnd):
-                    found.append(hwnd)
-                return True
-
-            u.EnumWindows(_cb, 0)
-            new = [h for h in found if h not in moved]
-            for h in new:
-                u.SetWindowPos(h, 0, -32000, -32000, 0, 0,
-                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
-                moved.add(h)
-            quiet = 0 if new else quiet + 1
-            if moved and quiet >= 6:
-                break
-            time.sleep(0.15)
-        return len(moved)
-    except Exception:
-        return 0
-
-
-def run(body, result_name="ae_result.json", timeout=180, work=WORK):
+def run(body, result_name="ae_result.json", timeout=180, work=WORK, noui=True):
     """
     在 AE 里执行一段 jsx 正文，返回 dict。
     正文里给 RESULT 赋值即可，例如：
@@ -196,6 +196,8 @@ def run(body, result_name="ae_result.json", timeout=180, work=WORK):
       * 正文里可以直接写中文（会自动转义成 \\uXXXX），但仅限字符串字面量内。
       * 不要写 return / 不要写顶层 function 声明包不住的东西。
       * 大文件导入（几百 MB）会让 AE 主线程卡住 1-2 分钟，timeout 给足。
+      * noui=True 时，若 AE 没在运行，会用 -noui 无界面模式拉起它执行，
+        避免弹出主界面/崩溃恢复框；AE 已在运行则直接投给现有实例（此时不加 -noui）。
     """
     if not AFTERFX:
         raise RuntimeError("找不到 AfterFX.exe")
@@ -211,19 +213,11 @@ def run(body, result_name="ae_result.json", timeout=180, work=WORK):
     with open(jsx_path, "w", encoding="ascii", errors="ignore") as f:
         f.write(jsx)
 
-    # 隐藏窗口启动：AE 的 -r 是一次性执行模式，跑完即退出；
-    # 不加 SW_HIDE 的话每调一次脚本就会在屏幕上"闪一个 AE 窗口"。
-    _si = None
-    if os.name == "nt":
-        _si = subprocess.STARTUPINFO()
-        _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        _si.wShowWindow = 0          # SW_HIDE
-    # AE 会强行 ShowWindow 把窗口顶出来，所以启动后再把它的窗口挪到屏幕外
-    proc = subprocess.Popen([AFTERFX, "-r", jsx_path],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            startupinfo=_si)
-    _push_windows_offscreen(proc.pid, timeout=6.0)
-    proc.wait()
+    cmd = [AFTERFX]
+    if noui and not ae_running():
+        cmd.append("-noui")      # headless: no splash, no UI, no crash-recovery dialog
+    cmd += ["-r", jsx_path]
+    subprocess.run(cmd, capture_output=True)
 
     t0 = time.time()
     while time.time() - t0 < timeout:
