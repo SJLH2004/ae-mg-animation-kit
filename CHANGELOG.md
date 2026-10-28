@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.1 — 2026-10-28
+
+- `references/ae-extendscript-pitfalls.md` — 新增**第 21 条：归档移动素材后必须重链**。
+  工程存的是构建时的绝对路径，素材挪盘后打开就是大批丢链；实测三种 API 里只有
+  `FootageItem.replace(new File(...))` 可用（`replaceSource()` 未定义、
+  `mainSource.file` 是只读属性）。附批量重链脚本、前缀映射的顺序问题
+  （`audio/v45/` 必须排在 `audio/` 之前）、JSX 注入路径必须转正斜杠的原因，
+  以及重链后的验证标准（`footageMissing` 归零、图层数不变）。
+- 速查表同步增加第 21 行。
+
 ## v1.0.0 — 2026-10-26
 
 首次公开。

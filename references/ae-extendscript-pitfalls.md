@@ -26,6 +26,37 @@
 | 18 | `函数 indexOf 未定义` | ExtendScript 是 ES3 | 手写 `has(arr,x)` 循环 |
 | 19 | `fauxBold` 赋值报只读 | 文字属性只读 | 用字体变体（Bold 字体名）代替 |
 | 20 | `-i f_%04d.psd` 报找不到文件 | ffmpeg image2 序列不认 `.psd`（单帧能读） | 用 PIL 批量转 PNG 再编码 |
+| 21 | 归档后素材全丢链 | 工程存的是绝对路径，素材挪盘后 `footageMissing` | `it.replace(new File(新路径))` 批量重链（见下） |
+
+## 21. 归档移动素材后必须重链
+
+工程存的是构建时的绝对路径。素材挪到别的盘，打开就是 119 个丢链。三种 API 里只有一种可用：
+
+```javascript
+it.replaceSource(...)      // ❌ 函数未定义（这个版本没有此方法）
+it.mainSource.file = f     // ❌ 报"它是 readOnly 属性"
+it.replace(new File(np))   // ✅ 可用，FootageItem 上的 replace
+```
+
+先探测再动手（`for (var k in it)` 列出全部成员），能省一轮试错。批量脚本：
+
+```javascript
+for (var i = 1; i <= proj.numItems; i++){
+  var it = proj.item(i);
+  if (!(it instanceof FootageItem)) continue;
+  var p = it.mainSource.file.fsName.split("\\").join("/");
+  var np = newPath(p);           // 前缀映射表，注意长前缀在前（audio/v45/ 先于 audio/）
+  if (np && np !== p) it.replace(new File(np));
+}
+app.project.save(...);
+```
+
+两个细节：
+
+- **映射表顺序**：`audio/v45/` 必须排在 `audio/` 前面，否则子目录里的文件会被映射到错误的兄弟目录。
+- **路径写正斜杠**：JSX 注入中文反斜杠路径时，`"\文"` 会被 JS 当成转义而丢掉反斜杠。一律 `AEP.replace("\\", "/")` 再注入。
+
+重链后必须验：`footageMissing` 计数为 0、所有 `mainSource.file` 都在目标盘、图层数不变。
 
 ## 1. 不要用形状图层
 

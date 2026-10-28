@@ -30,6 +30,7 @@
 | 整批图标全透明 | Lucide 的 `stroke="currentColor"`，svglib 解析成空白 |
 | 一整片渲成 660 MB 的 `.psd` | AE 2023 输出模板里根本没有 PNG |
 | 只有画面没有声音 | 渲染队列两项只执行第一项 |
+| 素材挪盘后工程打开全是丢链 | 工程存绝对路径；只有 `FootageItem.replace()` 能改，另外两个 API 都不通 |
 
 ## 七步工作流
 
