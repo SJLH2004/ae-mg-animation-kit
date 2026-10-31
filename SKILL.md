@@ -1,6 +1,6 @@
 ---
 name: ae-mg-animation-kit
-description: Build a complete flat-graphics MG (motion graphics) explainer in After Effects by script — storyboard, per-shot comp organization, PIL pre-rendered vector graphics, icon rasterising, TTS voice-over, original score, 50fps render and spec-compliant H.264 delivery. Use when the user asks to 做 MG 动画 / MG 科普片 / 动态影像设计作业 / AE 制作动画 / 用脚本批量建 AE 工程 / 分镜合成 / AE 自动化出片, or wants an AE project organised as master-comp + per-shot comps with a fixed delivery spec (resolution / fps / duration / bitrate).
+description: Build a complete flat-graphics MG (motion graphics) explainer in After Effects by script — storyboard, per-shot comp organization, PIL pre-rendered vector graphics, icon rasterising, TTS voice-over, original score, 50fps render and spec-compliant H.264 delivery. Use when the user asks to 做 MG 动画 / MG 科普片 / 动态影像设计作业 / AE 制作动画 / 用脚本批量建 AE 工程 / 分镜合成 / AE 自动化出片, or wants an AE project organised as master-comp + per-shot comps with a fixed delivery spec (resolution / fps / duration / bitrate). Also use when the deliverable must be **natively editable** (工程里不能是图片 / 元素要能改 / 需要可编辑的 AE 工程) — see `references/native-shape-text-layers.md`.
 agent_created: true
 ---
 
@@ -24,7 +24,8 @@ silently produce a wrong picture while every API call reports success** — read
 ## The seven steps
 
 1. **Script + storyboard** — write the voice-over as *sentences with time codes*, one shot per sentence. Duration budget comes from the TTS timing, not from guessing. See `references/project-organization.md`.
-2. **Assets** — pre-render every graphic with PIL at 2× and downsample (no AE shape layers, see pitfalls #1). Icons via SVG → PDF → raster → tint. Details in `references/asset-pipeline.md`.
+2. **Assets** — two modes:/n   - *视频优先*：pre-render every graphic with PIL at 2× and downsample. Icons via SVG → PDF → raster → tint. Details in `references/asset-pipeline.md`.
+   - *工程优先（可编辑交付）*：**不预渲染**，全部用 `addShape()` + `addText()` 原生建立，图表走 Trim Paths / Scale 生长。API 与坑见 `references/native-shape-text-layers.md`。用户说「元素都是图片不行 / 要能改」时一律走这条。
 3. **Audio bed** — TTS per line, synthesised SFX, original score. Load `video-score-composer` for the score; run `rhythm_scan.py` on a rough render so cues land on real motion.
 4. **Build the AEP** — one JSX per shot, injected into a single AE launch. Master comp holds one layer per shot comp.
 5. **Render** — `aerender` (no GUI). Output is a frame sequence; AE has no PNG template (pitfall #7).

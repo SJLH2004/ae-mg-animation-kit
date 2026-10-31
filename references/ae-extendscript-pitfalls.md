@@ -28,6 +28,8 @@
 | 20 | `-i f_%04d.psd` 报找不到文件 | ffmpeg image2 序列不认 `.psd`（单帧能读） | 用 PIL 批量转 PNG 再编码 |
 | 21 | 归档后素材全丢链 | 工程存的是绝对路径，素材挪盘后 `footageMissing` | `it.replace(new File(新路径))` 批量重链（见下） |
 
+> 第 **22–30** 条见下文「真实项目实战补充」分组表。
+
 ## 21. 归档移动素材后必须重链
 
 工程存的是构建时的绝对路径。素材挪到别的盘，打开就是 119 个丢链。三种 API 里只有一种可用：
@@ -141,3 +143,65 @@ a.push([t1 + 0.004, 0]);
   可靠做法是启动后轮询 `EnumWindows` + `GetWindowThreadProcessId`，对本进程的可见窗口
   `SetWindowPos(-32000,-32000)` 移出屏幕。
 - 渲染走 `aerender`，本来就无界面，不闪。
+
+## 22-30：真实项目实战补充（2026-10-29）
+
+| # | 症状 | 原因 | 解法 |
+|---|---|---|---|
+| 22 | build 途中 SIGTERM 全进程死 | AE 2023 启动时内部调 `WMIC.exe`，若在 WorkBuddy 安全中心命令黑名单则整个进程树被杀（沙箱外也拦） | 用户在 安全中心→命令安全→程序黑名单 移除 WMIC.exe；或兜底走 pyrender.py 纯 Python 渲染 |
+| 23 | workAreaDuration 被拒「值 X 在 0.02 至 X 范围外」 | duration 恰好压线（22.0-18.3=3.7 浮点边界） | 设 `Math.min(时长, comp.duration - workAreaStart - 0.02)` |
+| 24 | 长脚本「ping 通但超时」、无报错 | JSX 解析期语法错误不进 try-catch、不写结果文件（如把 Python 的 `"""` sed 进了 JSX、`"\""` 字符串未闭合） | 先用极短 JSX 验证桥接，再二分注入文本边界 |
+| 25 | 多段 build 后 aep 只剩最后一段 | ae_bridge `-noui` 每次 run 后 AE 退出，逐段 run 各自新空工程、save 互相覆盖 | **全部 stage 拼进一个脚本、单实例一次执行**（超时给 900s） |
+| 26 | AE/Photoshop 等被安全策略拦截 wmic | 同 22 | 移除黑名单条目 |
+| 27 | 渲染队列两项只执行第一项 | aerender/队列行为 | 渲画面、渲音频分开两次跑 |
+| 28 | `ae_bridge.run()` 随机超时、杀进程也没用 | stdout 管道死锁：AE 日志写满 64 KB 缓冲，子进程阻塞而父进程在等它退出 | 不要 `capture_output`，改 `stdout=DEVNULL, stderr=DEVNULL` |
+| 29 | `app.newProject()` 在 `-noui` 下静默死掉 | 无头实例自带空工程，新建工程会让执行链断在该行且不写结果 | 直接往自带空工程 `items.addComp()`，不要 newProject / open 别人的 aep |
+| 30 | `comp.saveFrameToPng()` 在 `-noui` 下返回成功但不写文件 | 无头实例不落帧 | 抽帧改用渲染队列 + `aerender`，或回 GUI 实例 |
+
+
+---
+
+## 28. `ae_bridge.run()` 会随机超时（管道死锁），杀进程也没用
+
+现象：调用后 AE 把脚本执行完了、结果文件却没写，或整个调用卡到 timeout，
+报 `AE 420s 内没回写结果`。反复重试时好时坏。
+
+根因：`ae_bridge.py` 里 `subprocess.run(cmd, capture_output=True)`。
+AE 启动会往 stdout 打大量 `[INFO] [DSH] ...` 日志，**64KB 管道缓冲写满后子进程阻塞**，
+而父进程在等子进程退出 —— 双向死锁，只能等 timeout。
+
+修法：不要捕获管道，直接丢弃或用文件接。
+
+```python
+subprocess.run([AFTERFX, "-noui", "-r", jsx_path],
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+               timeout=timeout, close_fds=True)
+```
+
+自己包一个 30 行的 `ae2.py`（复用 `ae_bridge.TEMPLATE` 和 `cjk_escape`）比改 skill 里的库更稳，
+顺便把 `RESULT.__line = e.line` 塞进 catch，报错就带行号。
+
+## 29. `app.newProject()` 在 `-noui` 下会让脚本静默死掉
+
+`-noui` 启动的 AE 本身就带一个空工程（`app.project.numItems === 0`），
+**直接往里面 `items.addComp()` 就行**。
+调 `app.newProject()` 或 `app.project.close(...)` 会让执行链断在那一行，
+后续全部不执行、结果文件不写 —— 和语法错误的表现一模一样，极难排查。
+
+同理：**不要 `app.open()` 打开别人的 .aep** 只为了读图层信息 ——
+缺字体会弹模态框，`-noui` 下同样卡死。
+要看别人的工程结构，先 `taskkill` 再单独跑一次只读脚本。
+
+## 30. `comp.saveFrameToPng()` 在 `-noui` 下返回成功但不写文件
+
+不要用它做"渲一帧看看"。改用渲染队列 + `aerender`：
+
+```python
+aerender -project X.aep -comp 总合成 -s 50 -e 50 -OMtemplate 多机序列 -output "dir/f_[####].psd"
+```
+
+AE 2023 的输出模板里**没有 PNG**，只有 `多机序列`（PSD）/ `Photoshop` / TIFF 等；
+PSD 序列用 PIL 直接可读（`Image.open(...).convert("RGB")`），足够做目视检查。
+
+另外 `aerender` 的 `-project` **必须是绝对路径**，相对路径会报
+`无法调用"openFast"：路径无效`。

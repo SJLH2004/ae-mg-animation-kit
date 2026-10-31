@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.0.2 — 2026-10-31
+
+- **新增 `references/native-shape-text-layers.md`** —— 原生 Shape/Text 图层工作流。
+  交付要求「工程必须可编辑、元素不能是图片」时的零位图做法：常用 `addProperty`
+  的 matchName、Trim/Repeater 后必须 `moveTo`（且旧对象引用失效）、环形图/折线图
+  正规做法、文本层在 `aerender` 下字体会静默 fallback、`softShadow` 必须在
+  `popIn` / `vis2` **之前**调用。
+- **坑清单 21 → 30 条**，新增 22–30：WMIC 被安全策略拦截导致整个进程树被杀、
+  `workAreaDuration` 浮点边界、JSX 解析期语法错误不报错、多段 build 互相覆盖、
+  渲染队列只执行第一项、`ae_bridge.run()` 的 stdout 管道死锁、`-noui` 下
+  `app.newProject()` 静默死、`saveFrameToPng()` 假成功。
+  速查表重排为连续 1–30 并补齐缺失行（原先「21」重复、27–29 未入表）。
+- `references/render-and-delivery.md` — 新增兜底渲染（纯 Python 逐帧）一节及其
+  `pscale()` 语义坑（按「显示宽百分比」解释会让元素缩小一半）；配乐来源改为
+  只列 CC0 / 已授权渠道。
+- `SKILL.md` — 第 2 步拆成「视频优先 / 工程优先（可编辑交付）」两种模式。
+- `README.md` — 七步表与真实案例表同步更新。
+
 ## v1.0.1 — 2026-10-28
 
 - `references/ae-extendscript-pitfalls.md` — 新增**第 21 条：归档移动素材后必须重链**。

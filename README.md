@@ -31,6 +31,8 @@
 | 一整片渲成 660 MB 的 `.psd` | AE 2023 输出模板里根本没有 PNG |
 | 只有画面没有声音 | 渲染队列两项只执行第一项 |
 | 素材挪盘后工程打开全是丢链 | 工程存绝对路径；只有 `FootageItem.replace()` 能改，另外两个 API 都不通 |
+| 无头渲染时脚本静默死、抽帧文件不落地 | `-noui` 不支持 `app.newProject()`，`saveFrameToPng()` 也会假成功 |
+| 桥接脚本随机超时、杀进程也没用 | `subprocess.run(capture_output=True)` 被 AE 日志撑满 64 KB 管道，父子互相等待 |
 
 ## 七步工作流
 
@@ -43,7 +45,7 @@
 | 步骤 | 做什么 | 详见 |
 |---|---|---|
 | ① 脚本 + 分镜 | 旁白写成带时间码的句子，一句一镜；时长由 TTS 实测反推，不靠估 | [project-organization.md](references/project-organization.md) |
-| ② 素材 | PIL 2× 超采样出 PNG（**不用 AE 形状图层**），图标 SVG→PDF→栅格→上色 | [asset-pipeline.md](references/asset-pipeline.md) |
+| ② 素材 | **视频优先**：PIL 2× 超采样出 PNG（不用形状图层）；**工程优先**：交付要求「工程可编辑」时全部用原生 Shape/Text 图层，零位图 | [asset-pipeline.md](references/asset-pipeline.md) · [native-shape-text-layers.md](references/native-shape-text-layers.md) |
 | ③ 音轨 | 逐句 TTS + numpy 物理合成音效 + 原创配乐（配乐用 [video-score-composer](https://github.com/SJLH2004/video-score-composer)） | [asset-pipeline.md](references/asset-pipeline.md) |
 | ④ 建工程 | 一个镜头一个 JSX，合并成一次 AE 启动注入；总合成只放段落层 | [project-organization.md](references/project-organization.md) |
 | ⑤ 渲染 | `aerender` 无界面；输出「多机序列」PSD → 转 PNG | [render-and-delivery.md](references/render-and-delivery.md) |

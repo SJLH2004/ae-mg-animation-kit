@@ -98,3 +98,18 @@ ffmpeg -i out.mp4 -map 0:a -af volumedetect -f null -
 | 码率只有目标的 1/3 | 扁平画面吃不满 VBR | CBR 锁 `minrate=maxrate` |
 | 峰值 0.0 dB | 人声+BGM+音效叠加溢出 | `-c:v copy -af volume=-2.5dB` |
 | 渲染 30 秒后进程消失 | 沙箱把 `WMIC.exe` 拦了（aerender 收尾会调） | 无害，帧已渲完，直接检查帧数 |
+
+## 配乐来源
+
+只用 **CC0 / 已授权音源**（Freesound、Pixabay Audio、YouTube Audio Library 等），
+或使用配套的 [video-score-composer](https://github.com/SJLH2004/video-score-composer)
+按画面节奏现场合成——后者零采样、零版权风险，也不存在授权到期的问题。
+
+不要从流媒体平台的非官方接口抓取现成歌曲：既涉及版权，也随时会被封禁。
+
+## 兜底渲染：pyrender（纯 Python 逐帧）
+
+AE 完全不可用时（wmic 黑名单、桥接死锁），可用 PIL 按「图层语义」逐帧合成：
+- 图层 = png/solid + pos/sca/rot/opa 关键帧 + in/out + fi/fo + popIn（贝塞尔 smoothstep）
+- **坑**：AE 的 `pscale()` 返回的是"导入尺寸百分比"，渲染器若按"显示宽百分比"解释，元素会缩小到一半、底图放大 1.33 倍——所有关键帧必须统一成显示宽百分比语义
+- 性能：1100 帧 720p 约 100 秒；帧文件用同名覆盖（批量删除会触发保护）
